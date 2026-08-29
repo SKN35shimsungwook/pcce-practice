@@ -24,7 +24,11 @@ for _t in _tests:
     try:
         _actual = {func_name}(*_t["args"])
         _entry["actual"] = _actual
-        _entry["passed"] = _actual == _t["expected"]
+        try:
+            _norm_actual = json.loads(json.dumps(_actual, default=str))
+        except Exception:
+            _norm_actual = _actual
+        _entry["passed"] = _norm_actual == _t["expected"]
     except Exception as _e:
         _entry["error"] = f"{{type(_e).__name__}}: {{_e}}"
     _results.append(_entry)
@@ -63,6 +67,7 @@ def run_solution(user_code: str, function_name: str, test_cases: list) -> dict:
         f.write(script)
         script_path = f.name
 
+    child_env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
     try:
         proc = subprocess.run(
             [sys.executable, script_path],
@@ -70,6 +75,8 @@ def run_solution(user_code: str, function_name: str, test_cases: list) -> dict:
             text=True,
             timeout=TIMEOUT_SEC,
             encoding="utf-8",
+            errors="replace",
+            env=child_env,
         )
     except subprocess.TimeoutExpired:
         return {
