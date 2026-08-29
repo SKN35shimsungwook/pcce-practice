@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """PCCE 코딩 연습 (Streamlit) — 문제를 보고 함수를 작성해 자동 채점받는 연습 앱."""
+import random
+
 import streamlit as st
 
 import db
 import runner
-from problems import CATEGORIES, DIFFICULTIES, PROBLEMS, PROBLEMS_BY_ID
+from problems import CATEGORIES, PROBLEMS, PROBLEMS_BY_ID
 
 st.set_page_config(page_title="PCCE 코딩 연습", page_icon="🐍", layout="wide")
 
@@ -21,10 +23,14 @@ st.markdown(
                border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:.9rem;}
     .case-fail{background:#FBE7E5;border:1px solid #C23B33;color:#C23B33;
                border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:.9rem;}
+    .setup-card{background:#FFFFFF;border:1px solid #D8DEE8;border-radius:12px;
+               padding:20px 24px;margin-bottom:14px;}
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+COUNT_OPTIONS = [5, 10, 20, 30, 50, 100, 150]
 
 
 @st.cache_resource
@@ -36,9 +42,45 @@ con = get_con()
 
 ss = st.session_state
 ss.setdefault("user", "")
-ss.setdefault("current_pid", PROBLEMS[0]["id"])
+ss.setdefault("stage", "setup")  # "setup" | "practice"
+ss.setdefault("queue", None)
+ss.setdefault("pos", 0)
+ss.setdefault("session_label", "")
 ss.setdefault("code_by_pid", {})
 ss.setdefault("last_result_by_pid", {})
+
+
+def problems_in(category):
+    if category == "전체":
+        return PROBLEMS
+    return [p for p in PROBLEMS if p["category"] == category]
+
+
+def start_session(category, count, shuffle=True):
+    pool = problems_in(category)
+    ids = [p["id"] for p in pool]
+    if shuffle:
+        random.shuffle(ids)
+    if count is not None:
+        ids = ids[:count]
+    ss.queue = ids
+    ss.pos = 0
+    ss.session_label = f"{category} · {len(ids)}문제"
+    ss.stage = "practice"
+
+
+def open_single(pid):
+    ss.queue = [pid]
+    ss.pos = 0
+    ss.session_label = "개별 문제"
+    ss.stage = "practice"
+
+
+def back_to_setup():
+    ss.stage = "setup"
+    ss.queue = None
+    ss.pos = 0
+
 
 # ---------- sidebar ----------
 with st.sidebar:
@@ -48,25 +90,63 @@ with st.sidebar:
     if not ss.user:
         ss.user = "guest"
 
-    st.divider()
-    cat_filter = st.multiselect("카테고리", CATEGORIES, default=CATEGORIES)
-    diff_filter = st.multiselect("난이도", DIFFICULTIES, default=DIFFICULTIES)
-
     solved_ids = db.get_solved_ids(con, ss.user)
     st.divider()
     st.metric("해결한 문제", f"{len(solved_ids)} / {len(PROBLEMS)}")
 
-    st.divider()
-    filtered = [p for p in PROBLEMS if p["category"] in cat_filter and p["difficulty"] in diff_filter]
-    for p in filtered:
-        label = f"{'✅ ' if p['id'] in solved_ids else ''}{p['id']}. {p['title']}"
-        if st.button(label, key=f"nav_{p['id']}", width="stretch"):
-            ss.current_pid = p["id"]
+    if ss.stage == "practice":
+        st.divider()
+        if st.button("연습 설정으로 돌아가기", width="stretch"):
+            back_to_setup()
             st.rerun()
 
-# ---------- main ----------
-problem = PROBLEMS_BY_ID.get(ss.current_pid, PROBLEMS[0])
-pid = problem["id"]
+    st.divider()
+    st.caption("문제 목록에서 바로 골라 풀 수도 있어요.")
+    browse_cat = st.selectbox("카테고리 보기", ["전체"] + CATEGORIES, key="browse_cat")
+    for p in problems_in(browse_cat):
+        label = f"{'✅ ' if p['id'] in solved_ids else ''}{p['id']}. {p['title']}"
+        if st.button(label, key=f"nav_{p['id']}", width="stretch"):
+            open_single(p["id"])
+            st.rerun()
+
+# ---------- setup screen ----------
+if ss.stage == "setup" or not ss.queue:
+    st.title("PCCE 코딩 연습")
+    st.caption("주제를 고르고 풀고 싶은 문제 수를 정한 뒤 연습을 시작하세요. 각 주제마다 30문제씩 준비되어 있습니다.")
+
+    with st.container(border=True):
+        st.subheader("연습 설정")
+        category_choice = st.radio("주제 선택", ["전체"] + CATEGORIES, horizontal=True)
+        available = len(problems_in(category_choice))
+        st.caption(f"선택한 주제에 사용 가능한 문제: {available}개")
+
+        count_choices = [c for c in COUNT_OPTIONS if c < available]
+        count_labels = [str(c) for c in count_choices] + [f"전체 ({available})"]
+        count_pick = st.radio("문제 수", count_labels, horizontal=True, index=len(count_labels) - 1)
+        shuffle_choice = st.checkbox("문제 순서 섞기", value=True)
+
+        if st.button("연습 시작", type="primary", width="stretch"):
+            count = None if count_pick.startswith("전체") else int(count_pick)
+            start_session(category_choice, count, shuffle=shuffle_choice)
+            st.rerun()
+
+    st.stop()
+
+# ---------- practice screen ----------
+total = len(ss.queue)
+pid = ss.queue[ss.pos]
+problem = PROBLEMS_BY_ID[pid]
+
+st.progress((ss.pos) / total if total else 0, text=f"{ss.session_label} · {ss.pos + 1} / {total}")
+
+nav_prev, nav_info, nav_next = st.columns([1, 3, 1])
+if nav_prev.button("← 이전 문제", disabled=ss.pos == 0, width="stretch"):
+    ss.pos -= 1
+    st.rerun()
+nav_info.markdown(f"<div style='text-align:center;padding-top:6px;'>{ss.pos + 1} / {total}</div>", unsafe_allow_html=True)
+if nav_next.button("다음 문제 →", disabled=ss.pos >= total - 1, width="stretch"):
+    ss.pos += 1
+    st.rerun()
 
 diff_class = f"pill-diff-{problem['difficulty']}"
 solved_badge = ' <span class="pill pill-solved">해결됨</span>' if pid in solved_ids else ""
@@ -116,9 +196,9 @@ if run_clicked:
 
     if outcome["ok"]:
         passed = sum(1 for r in outcome["results"] if r["passed"])
-        total = len(outcome["results"])
-        db.record_submission(con, ss.user, pid, passed, total, code)
-        if passed == total:
+        total_cases = len(outcome["results"])
+        db.record_submission(con, ss.user, pid, passed, total_cases, code)
+        if passed == total_cases:
             solved_ids.add(pid)
 
 result = ss.last_result_by_pid.get(pid)
@@ -129,11 +209,11 @@ if result:
     else:
         results = result["results"]
         passed = sum(1 for r in results if r["passed"])
-        total = len(results)
-        if passed == total:
-            st.success(f"통과! {passed} / {total} 테스트케이스를 모두 통과했습니다.")
+        total_cases = len(results)
+        if passed == total_cases:
+            st.success(f"통과! {passed} / {total_cases} 테스트케이스를 모두 통과했습니다.")
         else:
-            st.warning(f"{passed} / {total} 테스트케이스 통과")
+            st.warning(f"{passed} / {total_cases} 테스트케이스 통과")
 
         for i, (tc, r) in enumerate(zip(problem["test_cases"], results), start=1):
             label = f"테스트 {i}" + (" (숨김)" if tc.get("hidden") else "")
