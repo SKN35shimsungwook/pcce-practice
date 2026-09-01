@@ -30,11 +30,68 @@ pcce_practice/
 └── requirements.txt
 ```
 
+## 코드 구성
+
+`runner.py`는 사용자 코드를 문자열로 받아서, 아래처럼 테스트 실행용 스크립트를 조립한 뒤
+**임시 파일로 저장해서 별도 파이썬 프로세스로 돌려요**:
+
+```python
+_RUNNER_TEMPLATE = """
+import json, sys
+{user_code}
+_tests = json.loads({tests_json!r})
+_results = []
+for _t in _tests:
+    ...
+    _actual = {func_name}(*_t["args"])
+    _entry["passed"] = _norm_actual == _t["expected"]
+"""
+```
+
+메인 Streamlit 프로세스와 완전히 분리된 프로세스에서 실행하고 `TIMEOUT_SEC=5`로 강제 종료하기
+때문에, 사용자가 무한루프나 위험한 코드를 제출해도 앱 자체는 멈추지 않아요.
+
 ## 실행하기
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
+```
+
+## 트러블슈팅
+
+**윈도우에서 한글이 들어간 테스트케이스가 전부 실패로 채점됨**
+
+- 원인: 사용자 코드를 실행하는 자식 프로세스(`subprocess.run`)가 윈도우의 콘솔 코드페이지로
+  출력을 인코딩해서, `encoding="utf-8"`로 읽어도 한글 딕셔너리 문제 같은 테스트케이스에서
+  깨진 값이 나와 채점이 어긋났어요.
+- 해결: 자식 프로세스 환경변수에 `PYTHONIOENCODING=utf-8`, `PYTHONUTF8=1`을 강제로 심어줌.
+
+```diff
++ child_env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+  proc = subprocess.run(
+      [sys.executable, script_path],
+      ...
+      encoding="utf-8",
++     errors="replace",
++     env=child_env,
+  )
+```
+
+**정답과 형태만 다른 출력(튜플 vs 리스트 등)이 오답으로 채점됨**
+
+- 원인: 사용자 함수의 반환값을 기대값과 `==`로 직접 비교했는데, 파이썬 타입(튜플, 커스텀 객체 등)과
+  JSON으로 저장된 기대값(리스트 등)의 타입이 달라서 값은 같아도 `==`가 `False`가 되는 경우가 있었음.
+- 해결: 비교 전에 실제 출력값을 `json.dumps` → `json.loads`로 한 번 왕복시켜서 JSON 호환 형태로
+  정규화한 뒤 비교.
+
+```diff
+- _entry["passed"] = _actual == _t["expected"]
++ try:
++     _norm_actual = json.loads(json.dumps(_actual, default=str))
++ except Exception:
++     _norm_actual = _actual
++ _entry["passed"] = _norm_actual == _t["expected"]
 ```
 
 ---
