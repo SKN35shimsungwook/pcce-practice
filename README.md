@@ -1,5 +1,7 @@
 # 🐍 PCCE 코딩 연습
 
+**🔗 바로 실행해 보기:** https://pcce-practice.streamlit.app
+
 **PCCE(파이썬 코딩 전문가 인증시험)** 스타일 문제를 풀고, 코드를 제출하면 자동으로
 채점해주는 연습용 Streamlit 웹앱이에요.
 
